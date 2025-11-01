@@ -1,30 +1,57 @@
-import Database from "better-sqlite3";
+import sqlite3 from "sqlite3";
+import { open } from "sqlite";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const db = new Database(path.join(__dirname, "data.db"));
+// ✅ Создаем подключение к базе (асинхронное)
+const dbPromise = open({
+  filename: path.join(__dirname, "data.db"),
+  driver: sqlite3.Database,
+});
 
-// Инициализация таблиц
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY,
-    tg_id TEXT,
-    username TEXT,
-    balance INTEGER DEFAULT 0
-  )
-`).run();
+// ✅ Инициализация таблиц
+async function initDB() {
+  const db = await dbPromise;
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS services (
-    id INTEGER PRIMARY KEY,
-    name TEXT,
-    category TEXT,
-    cost INTEGER,
-    available BOOLEAN DEFAULT 1
-  )
-`).run();
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tg_id TEXT,
+      username TEXT,
+      phone TEXT,
+      balance INTEGER DEFAULT 0,
+      role TEXT DEFAULT 'user',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
-export default db;
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS services (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT,
+      partner TEXT,
+      description TEXT,
+      price INTEGER,
+      active INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS purchases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      service_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      FOREIGN KEY(service_id) REFERENCES services(id)
+    )
+  `);
+}
+
+initDB();
+
+export default dbPromise;
