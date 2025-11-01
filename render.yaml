@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: mvp-bonus-tma-server
+    env: node
+    buildCommand: |
+      rm -rf node_modules
+      npm cache clean --force
+      npm install
+      npm rebuild sqlite3 --build-from-source
+    startCommand: node index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
