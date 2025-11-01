@@ -1,17 +1,12 @@
 {
-  "name": "bonus-tma-client",
-  "private": true,
+  "name": "bonus-tma-server",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 5173",
-    "build": "npx vite build",
-    "preview": "npx vite preview"
+    "start": "node index.js"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
-  "devDependencies": {
-    "vite": "^5.4.10"
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
   }
 }

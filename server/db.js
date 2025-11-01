@@ -1,57 +1,37 @@
-import sqlite3 from "sqlite3";
-import { open } from "sqlite";
+import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ Создаем подключение к базе (асинхронное)
-const dbPromise = open({
-  filename: path.join(__dirname, "data.db"),
-  driver: sqlite3.Database,
-});
+const dbPath = path.join(__dirname, "data.db");
+const db = new Database(dbPath);
 
-// ✅ Инициализация таблиц
-async function initDB() {
-  const db = await dbPromise;
+// === Инициализация таблиц ===
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tg_id TEXT,
+    username TEXT,
+    phone TEXT,
+    balance INTEGER DEFAULT 0,
+    role TEXT DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`).run();
 
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tg_id TEXT,
-      username TEXT,
-      phone TEXT,
-      balance INTEGER DEFAULT 0,
-      role TEXT DEFAULT 'user',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS services (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    partner TEXT,
+    price INTEGER,
+    description TEXT,
+    active INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`).run();
 
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS services (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT,
-      partner TEXT,
-      description TEXT,
-      price INTEGER,
-      active INTEGER DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
-
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS purchases (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      service_id INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(user_id) REFERENCES users(id),
-      FOREIGN KEY(service_id) REFERENCES services(id)
-    )
-  `);
-}
-
-initDB();
-
-export default dbPromise;
+console.log("✅ Database initialized:", dbPath);
+export default db;

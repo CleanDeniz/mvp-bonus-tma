@@ -1,96 +1,137 @@
 import React, { useEffect, useState } from "react";
-import { apiGET, apiPATCH, apiPOST } from "../api.js";
 
 export default function Admin() {
   const [users, setUsers] = useState([]);
-  const [svc, setSvc] = useState({ title: "", partner: "", price: 0, description: "" });
-  const [bonus, setBonus] = useState({ phone: "", amount: 0, note: "" });
   const [services, setServices] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [newService, setNewService] = useState({ title: "", price: "", description: "" });
 
-  async function load() {
-    const u = await apiGET("/api/admin/users");
-    setUsers(u.users || []);
-    const s = await apiGET("/api/services");
-    setServices(s.services || []);
-  }
-  useEffect(() => { load(); }, []);
+  const API = "https://mvp-bonus-tma-server.onrender.com";
 
-  async function createService() {
-    const price = parseInt(svc.price, 10) || 0;
-    const res = await apiPOST("/api/admin/services", { ...svc, price });
-    setSvc({ title: "", partner: "", price: 0, description: "" });
-    await load();
-    alert("Услуга создана");
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [usersRes, servicesRes] = await Promise.all([
+          fetch(`${API}/api/admin/users`).then(r => r.json()),
+          fetch(`${API}/api/services`).then(r => r.json())
+        ]);
+        setUsers(usersRes.users || []);
+        setServices(servicesRes.services || []);
+      } catch (e) {
+        console.error("Ошибка загрузки данных:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadData();
+  }, []);
+
+  async function addService() {
+    try {
+      const res = await fetch(`${API}/api/admin/services`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newService.title,
+          price: parseInt(newService.price, 10),
+          description: newService.description
+        })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        alert("✅ Услуга добавлена!");
+        setServices(prev => [data.service, ...prev]);
+        setNewService({ title: "", price: "", description: "" });
+      } else alert("Ошибка: " + (data.error || "неизвестная"));
+    } catch (e) {
+      console.error(e);
+    }
   }
 
-  async function toggleServiceActive(id, active) {
-    await apiPATCH(`/api/admin/services/${id}`, { active });
-    await load();
-  }
-
-  async function addBonus() {
-    const amount = parseInt(bonus.amount, 10) || 0;
-    const res = await apiPOST("/api/admin/bonus", { phone: bonus.phone, amount, note: bonus.note });
-    setBonus({ phone: "", amount: 0, note: "" });
-    await load();
-    alert(`Начислено. Баланс: ${res.user.balance}`);
-  }
+  if (loading) return <div className="text-center mt-8 text-gray-400">Загрузка данных...</div>;
 
   return (
-    <div className="grid">
-      <div className="card">
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Начисление бонусов (по телефону)</div>
-        <label className="label">Телефон</label>
-        <input className="input" value={bonus.phone} onChange={e => setBonus({ ...bonus, phone: e.target.value })} placeholder="+7..." />
-        <label className="label" style={{ marginTop: 8 }}>Сумма</label>
-        <input className="input" type="number" value={bonus.amount} onChange={e => setBonus({ ...bonus, amount: e.target.value })} />
-        <label className="label" style={{ marginTop: 8 }}>Заметка (необязательно)</label>
-        <input className="input" value={bonus.note} onChange={e => setBonus({ ...bonus, note: e.target.value })} placeholder="за рекомендацию" />
-        <div style={{ height: 8 }} />
-        <button className="btn primary" onClick={addBonus}>Начислить</button>
+    <div className="p-4 text-white font-sans bg-[#121212] min-h-screen">
+      <h1 className="text-2xl font-bold mb-4 text-purple-400">Админ панель (демо-доступ)</h1>
+
+      {/* === Добавление услуги === */}
+      <div className="mb-8 border border-gray-700 rounded-xl p-4">
+        <h2 className="text-lg mb-2">Добавить услугу</h2>
+        <input
+          className="block w-full mb-2 p-2 bg-[#1e1e1e] rounded"
+          placeholder="Название"
+          value={newService.title}
+          onChange={e => setNewService({ ...newService, title: e.target.value })}
+        />
+        <input
+          className="block w-full mb-2 p-2 bg-[#1e1e1e] rounded"
+          placeholder="Цена"
+          type="number"
+          value={newService.price}
+          onChange={e => setNewService({ ...newService, price: e.target.value })}
+        />
+        <textarea
+          className="block w-full mb-2 p-2 bg-[#1e1e1e] rounded"
+          placeholder="Описание"
+          value={newService.description}
+          onChange={e => setNewService({ ...newService, description: e.target.value })}
+        />
+        <button
+          onClick={addService}
+          className="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded font-semibold"
+        >
+          Добавить
+        </button>
       </div>
 
-      <div className="card">
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Создать услугу</div>
-        <label className="label">Название</label>
-        <input className="input" value={svc.title} onChange={e => setSvc({ ...svc, title: e.target.value })} />
-        <label className="label" style={{ marginTop: 8 }}>Партнёр</label>
-        <input className="input" value={svc.partner} onChange={e => setSvc({ ...svc, partner: e.target.value })} />
-        <label className="label" style={{ marginTop: 8 }}>Цена (бонусы)</label>
-        <input className="input" type="number" value={svc.price} onChange={e => setSvc({ ...svc, price: e.target.value })} />
-        <label className="label" style={{ marginTop: 8 }}>Описание</label>
-        <textarea className="input" rows="3" value={svc.description} onChange={e => setSvc({ ...svc, description: e.target.value })}></textarea>
-        <div style={{ height: 8 }} />
-        <button className="btn" onClick={createService}>Создать</button>
+      {/* === Таблица услуг === */}
+      <h2 className="text-lg mb-2">Все услуги</h2>
+      <div className="overflow-x-auto mb-8">
+        <table className="w-full border-collapse border border-gray-700 text-sm">
+          <thead>
+            <tr className="bg-[#1e1e1e] text-left">
+              <th className="p-2 border border-gray-700">ID</th>
+              <th className="p-2 border border-gray-700">Название</th>
+              <th className="p-2 border border-gray-700">Цена</th>
+              <th className="p-2 border border-gray-700">Описание</th>
+            </tr>
+          </thead>
+          <tbody>
+            {services.map(s => (
+              <tr key={s.id}>
+                <td className="p-2 border border-gray-700">{s.id}</td>
+                <td className="p-2 border border-gray-700">{s.title}</td>
+                <td className="p-2 border border-gray-700">{s.price}</td>
+                <td className="p-2 border border-gray-700">{s.description}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
-      <div className="card">
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Активные услуги</div>
-        {services.length === 0 && <div className="label">Пусто</div>}
-        {services.map(s => (
-          <div className="row" key={s.id} style={{ justifyContent: "space-between", width: "100%", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-            <div>
-              <div style={{ fontWeight: 700 }}>{s.title}</div>
-              <div className="label">Цена: {s.price} б. {s.partner ? ` • ${s.partner}` : ""}</div>
-            </div>
-            <button className="btn" onClick={() => toggleServiceActive(s.id, s.active ? 0 : 1)}>
-              {s.active ? "Скрыть" : "Опубликовать"}
-            </button>
-          </div>
-        ))}
-      </div>
-
-      <div className="card">
-        <div style={{ fontWeight: 700, marginBottom: 8 }}>Пользователи</div>
-        {users.map(u => (
-          <div className="row" key={u.id} style={{ justifyContent: "space-between", width: "100%", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-            <div>
-              <div>#{u.id} — {u.phone || "без телефона"}</div>
-              <div className="label">tg_id: {u.tg_id || "—"} • баланс: {u.balance}</div>
-            </div>
-            <span className="badge">{u.role}</span>
-          </div>
-        ))}
+      {/* === Список пользователей === */}
+      <h2 className="text-lg mb-2">Пользователи</h2>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse border border-gray-700 text-sm">
+          <thead>
+            <tr className="bg-[#1e1e1e] text-left">
+              <th className="p-2 border border-gray-700">ID</th>
+              <th className="p-2 border border-gray-700">Телеграм</th>
+              <th className="p-2 border border-gray-700">Телефон</th>
+              <th className="p-2 border border-gray-700">Баланс</th>
+            </tr>
+          </thead>
+          <tbody>
+            {users.map(u => (
+              <tr key={u.id}>
+                <td className="p-2 border border-gray-700">{u.id}</td>
+                <td className="p-2 border border-gray-700">{u.tg_id}</td>
+                <td className="p-2 border border-gray-700">{u.phone}</td>
+                <td className="p-2 border border-gray-700">{u.balance}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

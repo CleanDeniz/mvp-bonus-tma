@@ -1,126 +1,98 @@
 import express from "express";
-import cors from "cors";
 import dotenv from "dotenv";
-import dbPromise from "./db.js";
-import { authMiddleware } from "./telegramAuth.js";
+import cors from "cors";
 
 dotenv.config();
 
-const PORT = Number(process.env.PORT || 3001);
+const PORT = process.env.PORT || 3001;
 const CLIENT_URL = process.env.CLIENT_URL || "https://mvp-bonus-tma-1.onrender.com";
 
 const app = express();
 
-// --- CORS FIX (Render + Telegram WebView) ---
+// ========== CORS FIX ==========
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.header("Access-Control-Allow-Origin", CLIENT_URL);
+  res.header("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Credentials", "true");
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
-// --- END FIX ---
 
+app.use(cors({ origin: CLIENT_URL, credentials: true }));
 app.use(express.json());
-app.use(authMiddleware);
 
-// Middleware: создаём пользователя при первом заходе
-app.use(async (req, res, next) => {
-  if (req.tgUser?.id) {
-    const db = await dbPromise;
-    let user = await db.get("SELECT * FROM users WHERE tg_id = ?", String(req.tgUser.id));
-    if (!user) {
-      await db.run("INSERT INTO users (tg_id, balance, role) VALUES (?, 0, 'admin')", String(req.tgUser.id));
-      user = await db.get("SELECT * FROM users WHERE tg_id = ?", String(req.tgUser.id));
-    }
-    req.userDb = user;
-  }
-  next();
+// ========== ВРЕМЕННОЕ "ХРАНИЛИЩЕ" ==========
+let users = [
+  { id: 1, username: "Demo Admin", balance: 5000, role: "admin", phone: "79990001122" },
+  { id: 2, username: "User", balance: 1000, role: "user", phone: "78880002233" }
+];
+
+let services = [
+  { id: 1, title: "Абонемент в спортзал", price: 300, description: "1 месяц" },
+  { id: 2, title: "Скидка на одежду", price: 150, description: "−20% на весь ассортимент" }
+];
+
+// ========== ROUTES ==========
+
+// проверка связи
+app.get("/api/ping", (_, res) => res.json({ ok: true, message: "pong" }));
+
+// "авторизация"
+app.get("/api/user/me", (_, res) => {
+  const demo = users[0]; // всегда возвращаем админа
+  res.json({ user: demo, tgUser: { id: demo.id, username: demo.username }, demo: true });
 });
 
-// ==================== ПОЛЬЗОВАТЕЛИ ====================
-app.get("/api/user/me", (req, res) => {
-  res.json({ user: req.userDb || null, tgUser: req.tgUser || null });
+// все услуги
+app.get("/api/services", (_, res) => res.json({ services }));
+
+// покупка услуги
+app.post("/api/user/redeem", (req, res) => {
+  const { serviceId } = req.body;
+  const user = users[1]; // демо-пользователь
+  const svc = services.find(s => s.id === Number(serviceId));
+  if (!svc) return res.status(404).json({ error: "service not found" });
+  if (user.balance < svc.price)
+    return res.status(400).json({ error: "insufficient balance" });
+  user.balance -= svc.price;
+  res.json({ ok: true, balance: user.balance });
 });
 
-app.get("/api/services", async (req, res) => {
-  const db = await dbPromise;
-  const rows = await db.all("SELECT * FROM services WHERE active = 1 ORDER BY id DESC");
-  res.json({ services: rows });
-});
+// ====================
+//      АДМИН
+// ====================
 
-// ==================== АДМИН (для всех доступен временно) ====================
+// получить всех пользователей
+app.get("/api/admin/users", (_, res) => res.json({ users }));
 
-// Пропускаем всех в админ-панель
-function requireAdmin(req, res, next) {
-  next(); // 👈 теперь не проверяем ID
-}
-
-// Начислить бонусы
-app.post("/api/admin/bonus", requireAdmin, async (req, res) => {
-  const { phone, amount } = req.body;
-  if (!phone || !Number.isInteger(amount))
-    return res.status(400).json({ error: "phone and integer amount required" });
-
-  const db = await dbPromise;
-  let user = await db.get("SELECT * FROM users WHERE phone = ?", phone);
-  if (!user) {
-    await db.run("INSERT INTO users (phone, balance) VALUES (?, 0)", phone);
-    user = await db.get("SELECT * FROM users WHERE phone = ?", phone);
-  }
-  await db.run("UPDATE users SET balance = balance + ? WHERE id = ?", amount, user.id);
-  const updated = await db.get("SELECT * FROM users WHERE id = ?", user.id);
-  res.json({ ok: true, user: updated });
-});
-
-// Добавить услугу
-app.post("/api/admin/services", requireAdmin, async (req, res) => {
-  const { title, partner, price, description } = req.body;
-  if (!title || !Number.isInteger(price))
-    return res.status(400).json({ error: "title and integer price required" });
-
-  const db = await dbPromise;
-  const result = await db.run(
-    "INSERT INTO services (title, partner, price, description, active) VALUES (?, ?, ?, ?, 1)",
+// добавить услугу
+app.post("/api/admin/services", (req, res) => {
+  const { title, price, description } = req.body;
+  if (!title || !price) return res.status(400).json({ error: "title and price required" });
+  const newSvc = {
+    id: services.length + 1,
     title,
-    partner || null,
-    price,
-    description || null
-  );
-  const row = await db.get("SELECT * FROM services WHERE id = ?", result.lastID);
-  res.json({ ok: true, service: row });
+    price: Number(price),
+    description: description || ""
+  };
+  services.push(newSvc);
+  res.json({ ok: true, service: newSvc });
 });
 
-// Изменить услугу
-app.patch("/api/admin/services/:id", requireAdmin, async (req, res) => {
-  const id = Number(req.params.id);
-  const { title, partner, price, description, active } = req.body;
-  const db = await dbPromise;
-  const existing = await db.get("SELECT * FROM services WHERE id = ?", id);
-  if (!existing) return res.status(404).json({ error: "service not found" });
-
-  await db.run(
-    "UPDATE services SET title=?, partner=?, price=?, description=?, active=? WHERE id=?",
-    title ?? existing.title,
-    partner ?? existing.partner,
-    Number.isInteger(price) ? price : existing.price,
-    description ?? existing.description,
-    typeof active === "number" ? active : existing.active,
-    id
-  );
-  const updated = await db.get("SELECT * FROM services WHERE id = ?", id);
-  res.json({ ok: true, service: updated });
+// начислить бонусы
+app.post("/api/admin/bonus", (req, res) => {
+  const { phone, amount } = req.body;
+  const user = users.find(u => u.phone === phone);
+  if (!user) return res.status(404).json({ error: "user not found" });
+  user.balance += Number(amount);
+  res.json({ ok: true, user });
 });
 
-// Список пользователей
-app.get("/api/admin/users", requireAdmin, async (req, res) => {
-  const db = await dbPromise;
-  const rows = await db.all("SELECT id, tg_id, phone, balance, role, created_at FROM users ORDER BY id DESC");
-  res.json({ users: rows });
-});
-
-// ==================== СТАРТ ====================
+// ====================
+//      SERVER
+// ====================
 app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`✅ DEMO Server running on port ${PORT}`);
+  console.log(`🌍 Allowed origin: ${CLIENT_URL}`);
 });
