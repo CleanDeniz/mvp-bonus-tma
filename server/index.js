@@ -6,223 +6,221 @@ import { authMiddleware } from "./telegramAuth.js";
 
 dotenv.config();
 
-const PORT = Number(process.env.PORT || 3001);
+const PORT = process.env.PORT || 3001;
 const CLIENT_URL = process.env.CLIENT_URL || "https://mvp-bonus-tma-1.onrender.com";
 
 const app = express();
 
-// ==================== CORS FIX ====================
+// ===== CORS FIX (для Telegram и Render) =====
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  const allowedOrigins = [
+    CLIENT_URL,
+    "https://mvp-bonus-tma.onrender.com",
+    "https://mvp-bonus-tma-1.onrender.com"
+  ];
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Allow-Credentials", "true");
+
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
 app.use(express.json());
+
+// ===== AUTH (Telegram) =====
 app.use(authMiddleware);
 
-// ==================== INIT DATABASE ====================
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tg_id TEXT,
-    phone TEXT,
-    balance INTEGER DEFAULT 0,
-    role TEXT DEFAULT 'user',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`).run();
+// ===== Пользовательская логика =====
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS services (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT,
-    partner TEXT,
-    price INTEGER,
-    description TEXT,
-    active INTEGER DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`).run();
+// Получить или создать пользователя
+async function getOrCreateUser(tg_id) {
+  return new Promise((resolve, reject) => {
+    db.get("SELECT * FROM users WHERE tg_id = ?", [String(tg_id)], (err, row) => {
+      if (err) return reject(err);
+      if (row) return resolve(row);
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS purchases (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    service_id INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`).run();
-
-// ==================== AUTOSEED TEST DATA ====================
-function seedDemoData() {
-  const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
-  const svcCount = db.prepare("SELECT COUNT(*) AS c FROM services").get().c;
-  const purchaseCount = db.prepare("SELECT COUNT(*) AS c FROM purchases").get().c;
-
-  if (userCount === 0) {
-    console.log("🌱 Seeding demo users...");
-    db.prepare(
-      "INSERT INTO users (tg_id, phone, balance, role) VALUES ('demo1', '+79998887766', 200, 'user')"
-    ).run();
-    db.prepare(
-      "INSERT INTO users (tg_id, phone, balance, role) VALUES ('demo2', '+79995553311', 450, 'user')"
-    ).run();
-  }
-
-  if (svcCount === 0) {
-    console.log("🌱 Seeding demo services...");
-    db.prepare(
-      "INSERT INTO services (title, partner, price, description) VALUES (?, ?, ?, ?)"
-    ).run("Скидка 20% в кафе «Осознанность»", "OsCafe", 100, "Купон на скидку при заказе");
-    db.prepare(
-      "INSERT INTO services (title, partner, price, description) VALUES (?, ?, ?, ?)"
-    ).run("1 месяц фитнеса GetFit", "GetFit Gym", 250, "Абонемент в зал на 30 дней");
-  }
-
-  if (purchaseCount === 0) {
-    console.log("🌱 Seeding demo purchases...");
-    const u = db.prepare("SELECT id FROM users WHERE tg_id = 'demo2'").get();
-    const s = db.prepare("SELECT id FROM services WHERE title LIKE '%Осознанность%'").get();
-    if (u && s) {
-      db.prepare("INSERT INTO purchases (user_id, service_id) VALUES (?, ?)").run(u.id, s.id);
-      db.prepare("UPDATE users SET balance = balance - ? WHERE id = ?").run(100, u.id);
-    }
-  }
-}
-seedDemoData();
-
-// ==================== HELPERS ====================
-function getOrCreateUserByTgId(tgId) {
-  let user = db.prepare("SELECT * FROM users WHERE tg_id = ?").get(String(tgId));
-  if (!user) {
-    db.prepare("INSERT INTO users (tg_id, balance) VALUES (?, 0)").run(String(tgId));
-    user = db.prepare("SELECT * FROM users WHERE tg_id = ?").get(String(tgId));
-  }
-  return user;
+      db.run("INSERT INTO users (tg_id, balance, role) VALUES (?, 0, 'user')", [String(tg_id)], function (err2) {
+        if (err2) return reject(err2);
+        db.get("SELECT * FROM users WHERE id = ?", [this.lastID], (err3, newRow) => {
+          if (err3) reject(err3);
+          else resolve(newRow);
+        });
+      });
+    });
+  });
 }
 
-// ==================== AUTH ====================
-app.use((req, res, next) => {
+// Middleware: привязка пользователя
+app.use(async (req, res, next) => {
   if (req.tgUser?.id) {
-    req.userDb = getOrCreateUserByTgId(req.tgUser.id);
+    try {
+      const user = await getOrCreateUser(req.tgUser.id);
+      req.userDb = user;
+    } catch (e) {
+      console.error("User sync error:", e);
+    }
   }
   next();
 });
 
-// ==================== USERS ====================
+// ===== Пользовательские роуты =====
+
+// Инфо о текущем пользователе
 app.get("/api/user/me", (req, res) => {
-  return res.json({ user: req.userDb || null, tgUser: req.tgUser || null });
+  res.json({ user: req.userDb || null, tgUser: req.tgUser || null });
 });
 
-app.post("/api/user/phone", (req, res) => {
+// Сохранить телефон
+app.post("/api/user/phone", async (req, res) => {
   const { phone } = req.body;
-  const user = req.userDb;
-  if (!user) return res.status(401).json({ error: "no user" });
   if (!phone) return res.status(400).json({ error: "phone required" });
 
-  const conflict = db
-    .prepare("SELECT id FROM users WHERE phone = ? AND tg_id != ?")
-    .get(phone, String(req.tgUser.id));
-  if (conflict) return res.status(409).json({ error: "phone already used" });
-
-  db.prepare("UPDATE users SET phone = ? WHERE id = ?").run(phone, user.id);
-  const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
-  return res.json({ user: updated });
+  try {
+    const tg_id = String(req.tgUser.id);
+    db.run(
+      "UPDATE users SET phone = ? WHERE tg_id = ?",
+      [phone, tg_id],
+      function (err) {
+        if (err) return res.status(500).json({ error: "db error" });
+        db.get("SELECT * FROM users WHERE tg_id = ?", [tg_id], (err2, row) => {
+          if (err2) return res.status(500).json({ error: "db error" });
+          res.json({ user: row });
+        });
+      }
+    );
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "failed to set phone" });
+  }
 });
 
+// Все услуги
 app.get("/api/services", (req, res) => {
-  const rows = db.prepare("SELECT * FROM services WHERE active = 1 ORDER BY id DESC").all();
-  return res.json({ services: rows });
+  db.all("SELECT * FROM services WHERE active = 1 ORDER BY id DESC", (err, rows) => {
+    if (err) return res.status(500).json({ error: "db error" });
+    res.json({ services: rows });
+  });
 });
 
+// Купить услугу
 app.post("/api/user/redeem", (req, res) => {
   const { serviceId } = req.body;
   const user = req.userDb;
   if (!user) return res.status(401).json({ error: "no user" });
   if (!serviceId) return res.status(400).json({ error: "serviceId required" });
 
-  const svc = db.prepare("SELECT * FROM services WHERE id = ? AND active = 1").get(serviceId);
-  if (!svc) return res.status(404).json({ error: "service not found" });
+  db.get("SELECT * FROM services WHERE id = ? AND active = 1", [serviceId], (err, svc) => {
+    if (err || !svc) return res.status(404).json({ error: "service not found" });
 
-  const already = db
-    .prepare("SELECT id FROM purchases WHERE user_id = ? AND service_id = ?")
-    .get(user.id, svc.id);
-  if (already) return res.status(409).json({ error: "already purchased" });
+    db.get("SELECT * FROM purchases WHERE user_id = ? AND service_id = ?", [user.id, svc.id], (err2, existing) => {
+      if (existing) return res.status(409).json({ error: "already purchased" });
+      if (user.balance < svc.price) return res.status(400).json({ error: "insufficient balance" });
 
-  if (user.balance < svc.price)
-    return res.status(400).json({ error: "insufficient balance" });
-
-  db.prepare("BEGIN").run();
-  db.prepare("INSERT INTO purchases (user_id, service_id) VALUES (?, ?)").run(user.id, svc.id);
-  db.prepare("UPDATE users SET balance = balance - ? WHERE id = ?").run(svc.price, user.id);
-  db.prepare("COMMIT").run();
-
-  const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
-  return res.json({ ok: true, balance: updated.balance });
+      db.run("BEGIN TRANSACTION");
+      db.run("INSERT INTO purchases (user_id, service_id) VALUES (?, ?)", [user.id, svc.id]);
+      db.run("UPDATE users SET balance = balance - ? WHERE id = ?", [svc.price, user.id]);
+      db.run("COMMIT", err3 => {
+        if (err3) return res.status(500).json({ error: "redeem failed" });
+        res.json({ ok: true, balance: user.balance - svc.price });
+      });
+    });
+  });
 });
 
+// Покупки
 app.get("/api/user/purchases", (req, res) => {
   const user = req.userDb;
   if (!user) return res.status(401).json({ error: "no user" });
-
-  const rows = db
-    .prepare(
-      `SELECT p.id, s.title, s.partner, s.description, s.price, p.created_at
-       FROM purchases p JOIN services s ON p.service_id = s.id
-       WHERE p.user_id = ? ORDER BY p.id DESC`
-    )
-    .all(user.id);
-
-  return res.json({ items: rows });
+  db.all(
+    `SELECT p.id, p.created_at, s.title, s.price, s.partner
+     FROM purchases p JOIN services s ON p.service_id = s.id
+     WHERE p.user_id = ? ORDER BY p.id DESC`,
+    [user.id],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: "db error" });
+      res.json({ items: rows });
+    }
+  );
 });
 
-// ==================== ADMIN (временно для всех) ====================
+// ===== Админ (временно открыт всем для MVP) =====
+
+// Начислить бонус
 app.post("/api/admin/bonus", (req, res) => {
   const { phone, amount } = req.body;
-  if (!phone || !Number.isInteger(amount)) {
+  if (!phone || !Number.isInteger(Number(amount))) {
     return res.status(400).json({ error: "phone and integer amount required" });
   }
 
-  let user = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone);
-  if (!user) {
-    db.prepare("INSERT INTO users (phone, balance) VALUES (?, 0)").run(phone);
-    user = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone);
-  }
-
-  db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(amount, user.id);
-  const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
-
-  return res.json({ ok: true, user: updated });
+  db.get("SELECT * FROM users WHERE phone = ?", [phone], (err, user) => {
+    if (err) return res.status(500).json({ error: "db error" });
+    if (!user) {
+      db.run("INSERT INTO users (phone, balance, role) VALUES (?, ?, 'user')", [phone, Number(amount)], function (err2) {
+        if (err2) return res.status(500).json({ error: "db insert error" });
+        db.get("SELECT * FROM users WHERE id = ?", [this.lastID], (err3, newUser) => {
+          if (err3) return res.status(500).json({ error: "db error" });
+          res.json({ ok: true, user: newUser });
+        });
+      });
+    } else {
+      db.run("UPDATE users SET balance = balance + ? WHERE phone = ?", [Number(amount), phone], err2 => {
+        if (err2) return res.status(500).json({ error: "db update error" });
+        db.get("SELECT * FROM users WHERE phone = ?", [phone], (err3, updated) => {
+          if (err3) return res.status(500).json({ error: "db error" });
+          res.json({ ok: true, user: updated });
+        });
+      });
+    }
+  });
 });
 
+// Добавить услугу
 app.post("/api/admin/services", (req, res) => {
   const { title, partner, price, description } = req.body;
-  if (!title || !Number.isInteger(price)) {
-    return res.status(400).json({ error: "title and integer price required" });
-  }
+  if (!title || !price) return res.status(400).json({ error: "title and price required" });
 
-  const result = db
-    .prepare(
-      "INSERT INTO services (title, partner, price, description, active) VALUES (?, ?, ?, ?, 1)"
-    )
-    .run(title, partner || null, price, description || null);
-
-  const newSvc = db.prepare("SELECT * FROM services WHERE id = ?").get(result.lastInsertRowid);
-  return res.json({ ok: true, service: newSvc });
+  db.run(
+    "INSERT INTO services (title, partner, price, description, active) VALUES (?, ?, ?, ?, 1)",
+    [title, partner || "", Number(price), description || ""],
+    function (err) {
+      if (err) return res.status(500).json({ error: "db error" });
+      db.get("SELECT * FROM services WHERE id = ?", [this.lastID], (err2, row) => {
+        if (err2) return res.status(500).json({ error: "db error" });
+        res.json({ ok: true, service: row });
+      });
+    }
+  );
 });
 
+// Изменить статус услуги
+app.patch("/api/admin/services/:id", (req, res) => {
+  const { id } = req.params;
+  const { active } = req.body;
+  db.run("UPDATE services SET active = ? WHERE id = ?", [active, id], err => {
+    if (err) return res.status(500).json({ error: "db error" });
+    db.get("SELECT * FROM services WHERE id = ?", [id], (err2, row) => {
+      if (err2) return res.status(500).json({ error: "db error" });
+      res.json({ ok: true, service: row });
+    });
+  });
+});
+
+// Список пользователей
 app.get("/api/admin/users", (req, res) => {
-  const rows = db
-    .prepare("SELECT id, tg_id, phone, balance, role, created_at FROM users ORDER BY id DESC")
-    .all();
-  return res.json({ users: rows });
+  db.all("SELECT id, tg_id, phone, balance, role FROM users ORDER BY id DESC", (err, rows) => {
+    if (err) return res.status(500).json({ error: "db error" });
+    res.json({ users: rows });
+  });
 });
 
-// ==================== START SERVER ====================
+// ===== Старт сервера =====
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
