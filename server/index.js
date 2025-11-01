@@ -61,14 +61,15 @@ db.prepare(`
 function seedDemoData() {
   const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
   const svcCount = db.prepare("SELECT COUNT(*) AS c FROM services").get().c;
+  const purchaseCount = db.prepare("SELECT COUNT(*) AS c FROM purchases").get().c;
 
   if (userCount === 0) {
     console.log("🌱 Seeding demo users...");
     db.prepare(
-      "INSERT INTO users (tg_id, phone, balance, role) VALUES ('demo1', '+79998887766', 120, 'user')"
+      "INSERT INTO users (tg_id, phone, balance, role) VALUES ('demo1', '+79998887766', 200, 'user')"
     ).run();
     db.prepare(
-      "INSERT INTO users (tg_id, phone, balance, role) VALUES ('demo2', '+79995553311', 300, 'user')"
+      "INSERT INTO users (tg_id, phone, balance, role) VALUES ('demo2', '+79995553311', 450, 'user')"
     ).run();
   }
 
@@ -80,6 +81,16 @@ function seedDemoData() {
     db.prepare(
       "INSERT INTO services (title, partner, price, description) VALUES (?, ?, ?, ?)"
     ).run("1 месяц фитнеса GetFit", "GetFit Gym", 250, "Абонемент в зал на 30 дней");
+  }
+
+  if (purchaseCount === 0) {
+    console.log("🌱 Seeding demo purchases...");
+    const u = db.prepare("SELECT id FROM users WHERE tg_id = 'demo2'").get();
+    const s = db.prepare("SELECT id FROM services WHERE title LIKE '%Осознанность%'").get();
+    if (u && s) {
+      db.prepare("INSERT INTO purchases (user_id, service_id) VALUES (?, ?)").run(u.id, s.id);
+      db.prepare("UPDATE users SET balance = balance - ? WHERE id = ?").run(100, u.id);
+    }
   }
 }
 seedDemoData();
