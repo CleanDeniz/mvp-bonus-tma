@@ -21,13 +21,13 @@ export default function App() {
   }, []);
 
   async function loadMe() {
-    try {
-      const res = await apiGET("/api/user/me");
-      setMe(res.user ? { ...res.user, tg: res.tgUser } : null);
-    } catch {
-      setMe(null);
-    }
+  try {
+    const res = await apiGET("/api/user/me");
+    setMe(res.user ? { ...res.user, tg: res.tgUser } : { error: "no-user" });
+  } catch (e) {
+    setMe({ error: "api-failed" }); // <- больше не бесконечный лоадер
   }
+}
 
   const isAdmin = me?.role === "admin";
 
