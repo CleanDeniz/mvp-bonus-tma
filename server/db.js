@@ -14,18 +14,15 @@ const dbPromise = open({
 // Инициализация таблиц
 (async () => {
   const db = await dbPromise;
-
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tg_id TEXT,
       phone TEXT,
       balance INTEGER DEFAULT 0,
-      role TEXT DEFAULT 'user',
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
+      role TEXT DEFAULT 'user'
+    );
   `);
-
   await db.exec(`
     CREATE TABLE IF NOT EXISTS services (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,19 +30,18 @@ const dbPromise = open({
       partner TEXT,
       price INTEGER,
       description TEXT,
-      active INTEGER DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
+      active INTEGER DEFAULT 1
+    );
   `);
-
   await db.exec(`
     CREATE TABLE IF NOT EXISTS purchases (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
       service_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
+    );
   `);
+  console.log("✅ SQLite database initialized");
 })();
 
 export default dbPromise;
