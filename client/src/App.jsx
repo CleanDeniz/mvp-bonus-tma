@@ -5,6 +5,13 @@ import Catalog from "./pages/Catalog.jsx";
 import MyServices from "./pages/MyServices.jsx";
 import Admin from "./pages/Admin.jsx";
 
+const tabs = [
+  { key: "home", title: "Баланс" },
+  { key: "catalog", title: "Каталог" },
+  { key: "my", title: "Мои услуги" },
+  { key: "admin", title: "Админ" } // 👈 теперь кнопка всегда видна
+];
+
 export default function App() {
   const [me, setMe] = useState(null);
   const [tab, setTab] = useState("home");
@@ -19,21 +26,12 @@ export default function App() {
       const res = await apiGET("/api/user/me");
       setMe(res.user ? { ...res.user, tg: res.tgUser } : { error: "no-user" });
     } catch (e) {
-      console.warn("Ошибка загрузки пользователя:", e);
       setMe({ error: "api-failed" });
     }
   }
 
-  const tabs = [
-    { key: "home", title: "Баланс" },
-    { key: "catalog", title: "Каталог" },
-    { key: "my", title: "Мои услуги" },
-    { key: "admin", title: "Админ (демо)" } // 👈 всегда доступно
-  ];
-
   return (
     <div>
-      {/* === HEADER === */}
       <div className="header">
         <div style={{ fontWeight: 700 }}>Bonus MVP</div>
         <div className="nav">
@@ -49,13 +47,12 @@ export default function App() {
         </div>
       </div>
 
-      {/* === CONTENT === */}
       <div className="container">
         {!me && <div className="card">Загрузка...</div>}
         {me && tab === "home" && <Home me={me} onUpdated={loadMe} />}
         {me && tab === "catalog" && <Catalog me={me} onUpdated={loadMe} />}
         {me && tab === "my" && <MyServices />}
-        {tab === "admin" && <Admin />} {/* 👈 теперь отображается всегда */}
+        {me && tab === "admin" && <Admin />} {/* 👈 теперь всегда доступна */}
       </div>
     </div>
   );
