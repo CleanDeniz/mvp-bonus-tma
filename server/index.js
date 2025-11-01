@@ -12,9 +12,35 @@ const ADMIN_TG_IDS = String(process.env.ADMIN_TG_IDS || "")
   .map(x => x.trim())
   .filter(Boolean);
 
+const CLIENT_URL = process.env.CLIENT_URL || "https://mvp-bonus-tma-1.onrender.com";
+
 const app = express();
+
+// --- CORS FIX ---
+app.use((req, res, next) => {
+  const allowedOrigins = [
+    process.env.CLIENT_URL,
+    "https://mvp-bonus-tma.onrender.com",
+    "https://mvp-bonus-tma-1.onrender.com"
+  ];
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+  res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Credentials", "true");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+  next();
+});
+// --- END FIX ---
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+
+// ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
 
 async function getOrCreateUserByTgId(db, tgId) {
   let row = await db.get("SELECT * FROM users WHERE tg_id = ?", String(tgId));
@@ -29,10 +55,10 @@ function isAdminTgId(tgId) {
   return ADMIN_TG_IDS.includes(String(tgId));
 }
 
-// Авторизация Telegram
+// ==================== AUTH ====================
+
 app.use(authMiddleware);
 
-// Middleware для синхронизации пользователя
 app.use(async (req, res, next) => {
   if (req.tgUser?.id) {
     const db = await dbPromise;
@@ -47,12 +73,10 @@ app.use(async (req, res, next) => {
 
 // ==================== ПОЛЬЗОВАТЕЛИ ====================
 
-// Получить текущего пользователя
 app.get("/api/user/me", (req, res) => {
   return res.json({ user: req.userDb || null, tgUser: req.tgUser || null });
 });
 
-// Установить/изменить номер телефона
 app.post("/api/user/phone", async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ error: "phone required" });
@@ -70,18 +94,17 @@ app.post("/api/user/phone", async (req, res) => {
     const updated = await db.get("SELECT * FROM users WHERE tg_id = ?", String(req.tgUser.id));
     return res.json({ user: updated });
   } catch (e) {
+    console.error(e);
     return res.status(500).json({ error: "failed to set phone" });
   }
 });
 
-// Получить все активные услуги
 app.get("/api/services", async (req, res) => {
   const db = await dbPromise;
   const rows = await db.all("SELECT * FROM services WHERE active = 1 ORDER BY id DESC");
   return res.json({ services: rows });
 });
 
-// Купить услугу за бонусы (только 1 раз)
 app.post("/api/user/redeem", async (req, res) => {
   const { serviceId } = req.body;
   if (!serviceId) return res.status(400).json({ error: "serviceId required" });
@@ -110,11 +133,11 @@ app.post("/api/user/redeem", async (req, res) => {
     return res.json({ ok: true, balance: updated.balance });
   } catch (e) {
     await db.run("ROLLBACK");
+    console.error(e);
     return res.status(500).json({ error: "redeem failed" });
   }
 });
 
-// Получить купленные услуги
 app.get("/api/user/purchases", async (req, res) => {
   const user = req.userDb;
   if (!user) return res.status(401).json({ error: "no user" });
@@ -140,7 +163,6 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// Начислить бонусы по номеру телефона
 app.post("/api/admin/bonus", requireAdmin, async (req, res) => {
   const { phone, amount } = req.body;
   if (!phone || !Number.isInteger(amount)) {
@@ -163,7 +185,6 @@ app.post("/api/admin/bonus", requireAdmin, async (req, res) => {
   });
 });
 
-// Добавить услугу
 app.post("/api/admin/services", requireAdmin, async (req, res) => {
   const { title, partner, price, description } = req.body;
   if (!title || !Number.isInteger(price))
@@ -182,7 +203,6 @@ app.post("/api/admin/services", requireAdmin, async (req, res) => {
   return res.json({ ok: true, service: row });
 });
 
-// Изменить услугу (активность, цена и т.д.)
 app.patch("/api/admin/services/:id", requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const { title, partner, price, description, active } = req.body;
@@ -211,7 +231,6 @@ app.patch("/api/admin/services/:id", requireAdmin, async (req, res) => {
   return res.json({ ok: true, service: updated });
 });
 
-// Получить список пользователей
 app.get("/api/admin/users", requireAdmin, async (req, res) => {
   const db = await dbPromise;
   const rows = await db.all(
@@ -223,5 +242,5 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
 // ==================== ЗАПУСК ====================
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });
