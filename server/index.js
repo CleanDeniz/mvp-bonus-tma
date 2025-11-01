@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import dbPromise from "./db.js";
+import db from "./db.js";
 import { authMiddleware } from "./telegramAuth.js";
 
 dotenv.config();
@@ -11,234 +11,178 @@ const CLIENT_URL = process.env.CLIENT_URL || "https://mvp-bonus-tma-1.onrender.c
 
 const app = express();
 
-// ==================== CORS FIX ====================
+// ===== CORS FIX =====
 app.use((req, res, next) => {
-  const allowedOrigins = [
-    CLIENT_URL,
-    "https://mvp-bonus-tma.onrender.com",
-    "https://mvp-bonus-tma-1.onrender.com",
-  ];
-
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  } else {
-    // Разрешаем всё, чтобы не было блокировок
-    res.setHeader("Access-Control-Allow-Origin", "*");
-  }
-
+  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Allow-Credentials", "true");
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
-
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
 app.use(express.json());
-
-// ==================== TELEGRAM AUTH ====================
 app.use(authMiddleware);
 
-// ==================== USER SYNC ====================
-async function getOrCreateUserByTgId(db, tgId) {
-  let row = await db.get("SELECT * FROM users WHERE tg_id = ?", String(tgId));
-  if (!row) {
-    await db.run("INSERT INTO users (tg_id, balance) VALUES (?, 0)", String(tgId));
-    row = await db.get("SELECT * FROM users WHERE tg_id = ?", String(tgId));
+// ===== DB INIT FIX =====
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tg_id TEXT,
+    phone TEXT,
+    balance INTEGER DEFAULT 0,
+    role TEXT DEFAULT 'user',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS services (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    partner TEXT,
+    price INTEGER,
+    description TEXT,
+    active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`).run();
+
+db.prepare(`
+  CREATE TABLE IF NOT EXISTS purchases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    service_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`).run();
+
+// ===== USER HELPERS =====
+async function getOrCreateUserByTgId(tgId) {
+  let user = db.prepare("SELECT * FROM users WHERE tg_id = ?").get(String(tgId));
+  if (!user) {
+    db.prepare("INSERT INTO users (tg_id, balance) VALUES (?, 0)").run(String(tgId));
+    user = db.prepare("SELECT * FROM users WHERE tg_id = ?").get(String(tgId));
   }
-  return row;
+  return user;
 }
 
+// ===== AUTH MIDDLEWARE =====
 app.use(async (req, res, next) => {
   if (req.tgUser?.id) {
-    const db = await dbPromise;
-    const user = await getOrCreateUserByTgId(db, req.tgUser.id);
-    req.userDb = user;
+    req.userDb = await getOrCreateUserByTgId(req.tgUser.id);
   }
   next();
 });
 
-// ==================== USER ROUTES ====================
-
-// Текущий пользователь
+// ===== USERS =====
 app.get("/api/user/me", (req, res) => {
   return res.json({ user: req.userDb || null, tgUser: req.tgUser || null });
 });
 
-// Установить телефон
 app.post("/api/user/phone", async (req, res) => {
   const { phone } = req.body;
+  const user = req.userDb;
+  if (!user) return res.status(401).json({ error: "no user" });
   if (!phone) return res.status(400).json({ error: "phone required" });
 
-  try {
-    const db = await dbPromise;
-    const exists = await db.get(
-      "SELECT id FROM users WHERE phone = ? AND tg_id != ?",
-      phone,
-      String(req.tgUser.id)
-    );
-    if (exists) return res.status(409).json({ error: "phone already used" });
+  const conflict = db
+    .prepare("SELECT id FROM users WHERE phone = ? AND tg_id != ?")
+    .get(phone, String(req.tgUser.id));
+  if (conflict) return res.status(409).json({ error: "phone already used" });
 
-    await db.run("UPDATE users SET phone = ? WHERE tg_id = ?", phone, String(req.tgUser.id));
-    const updated = await db.get("SELECT * FROM users WHERE tg_id = ?", String(req.tgUser.id));
-    return res.json({ user: updated });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: "failed to set phone" });
-  }
+  db.prepare("UPDATE users SET phone = ? WHERE id = ?").run(phone, user.id);
+  const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
+  return res.json({ user: updated });
 });
 
-// Все активные услуги
-app.get("/api/services", async (req, res) => {
-  const db = await dbPromise;
-  const rows = await db.all("SELECT * FROM services WHERE active = 1 ORDER BY id DESC");
+app.get("/api/services", (req, res) => {
+  const rows = db.prepare("SELECT * FROM services WHERE active = 1 ORDER BY id DESC").all();
   return res.json({ services: rows });
 });
 
-// Покупка услуги
-app.post("/api/user/redeem", async (req, res) => {
+app.post("/api/user/redeem", (req, res) => {
   const { serviceId } = req.body;
-  if (!serviceId) return res.status(400).json({ error: "serviceId required" });
   const user = req.userDb;
   if (!user) return res.status(401).json({ error: "no user" });
+  if (!serviceId) return res.status(400).json({ error: "serviceId required" });
 
-  const db = await dbPromise;
-  const svc = await db.get("SELECT * FROM services WHERE id = ? AND active = 1", serviceId);
-  if (!svc) return res.status(404).json({ error: "service not found or inactive" });
+  const svc = db.prepare("SELECT * FROM services WHERE id = ? AND active = 1").get(serviceId);
+  if (!svc) return res.status(404).json({ error: "service not found" });
 
-  const owned = await db.get(
-    "SELECT id FROM purchases WHERE user_id = ? AND service_id = ?",
-    user.id,
-    svc.id
-  );
-  if (owned) return res.status(409).json({ error: "already purchased" });
+  const already = db
+    .prepare("SELECT id FROM purchases WHERE user_id = ? AND service_id = ?")
+    .get(user.id, svc.id);
+  if (already) return res.status(409).json({ error: "already purchased" });
 
-  if (user.balance < svc.price) return res.status(400).json({ error: "insufficient balance" });
+  if (user.balance < svc.price)
+    return res.status(400).json({ error: "insufficient balance" });
 
-  try {
-    await db.run("BEGIN TRANSACTION");
-    await db.run("INSERT INTO purchases (user_id, service_id) VALUES (?, ?)", user.id, svc.id);
-    await db.run("UPDATE users SET balance = balance - ? WHERE id = ?", svc.price, user.id);
-    await db.run("COMMIT");
-    const updated = await db.get("SELECT * FROM users WHERE id = ?", user.id);
-    return res.json({ ok: true, balance: updated.balance });
-  } catch (e) {
-    await db.run("ROLLBACK");
-    console.error(e);
-    return res.status(500).json({ error: "redeem failed" });
-  }
+  db.prepare("BEGIN").run();
+  db.prepare("INSERT INTO purchases (user_id, service_id) VALUES (?, ?)").run(user.id, svc.id);
+  db.prepare("UPDATE users SET balance = balance - ? WHERE id = ?").run(svc.price, user.id);
+  db.prepare("COMMIT").run();
+
+  const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
+  return res.json({ ok: true, balance: updated.balance });
 });
 
-// Купленные услуги
-app.get("/api/user/purchases", async (req, res) => {
+app.get("/api/user/purchases", (req, res) => {
   const user = req.userDb;
   if (!user) return res.status(401).json({ error: "no user" });
-  const db = await dbPromise;
 
-  const rows = await db.all(
-    `SELECT p.id, p.created_at, s.id AS service_id, s.title, s.partner, s.description, s.price
-     FROM purchases p
-     JOIN services s ON s.id = p.service_id
-     WHERE p.user_id = ?
-     ORDER BY p.id DESC`,
-    user.id
-  );
+  const rows = db
+    .prepare(
+      `SELECT p.id, s.title, s.partner, s.description, s.price, p.created_at
+       FROM purchases p JOIN services s ON p.service_id = s.id
+       WHERE p.user_id = ? ORDER BY p.id DESC`
+    )
+    .all(user.id);
 
   return res.json({ items: rows });
 });
 
-// ==================== ADMIN (ОТКРЫТА ДЛЯ ВСЕХ) ====================
-
-// Временная версия без проверки ролей
-function requireAdmin(req, res, next) {
-  next();
-}
-
-// Начислить бонусы
-app.post("/api/admin/bonus", requireAdmin, async (req, res) => {
+// ===== ADMIN (временно для всех) =====
+app.post("/api/admin/bonus", (req, res) => {
   const { phone, amount } = req.body;
   if (!phone || !Number.isInteger(amount)) {
     return res.status(400).json({ error: "phone and integer amount required" });
   }
-  const db = await dbPromise;
 
-  let u = await db.get("SELECT * FROM users WHERE phone = ?", phone);
-  if (!u) {
-    await db.run("INSERT INTO users (phone, balance) VALUES (?, 0)", phone);
-    u = await db.get("SELECT * FROM users WHERE phone = ?", phone);
+  let user = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone);
+  if (!user) {
+    db.prepare("INSERT INTO users (phone, balance) VALUES (?, 0)").run(phone);
+    user = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone);
   }
 
-  await db.run("UPDATE users SET balance = balance + ? WHERE id = ?", amount, u.id);
-  const updated = await db.get("SELECT * FROM users WHERE id = ?", u.id);
+  db.prepare("UPDATE users SET balance = balance + ? WHERE id = ?").run(amount, user.id);
+  const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(user.id);
 
-  return res.json({
-    ok: true,
-    user: { id: updated.id, phone: updated.phone, balance: updated.balance },
-  });
+  return res.json({ ok: true, user: updated });
 });
 
-// Добавить услугу
-app.post("/api/admin/services", requireAdmin, async (req, res) => {
+app.post("/api/admin/services", (req, res) => {
   const { title, partner, price, description } = req.body;
-  if (!title || !Number.isInteger(price))
+  if (!title || !Number.isInteger(price)) {
     return res.status(400).json({ error: "title and integer price required" });
+  }
 
-  const db = await dbPromise;
-  const result = await db.run(
-    "INSERT INTO services (title, partner, price, description, active) VALUES (?, ?, ?, ?, 1)",
-    title,
-    partner || null,
-    price,
-    description || null
-  );
+  const result = db
+    .prepare(
+      "INSERT INTO services (title, partner, price, description, active) VALUES (?, ?, ?, ?, 1)"
+    )
+    .run(title, partner || null, price, description || null);
 
-  const row = await db.get("SELECT * FROM services WHERE id = ?", result.lastID);
-  return res.json({ ok: true, service: row });
+  const newSvc = db.prepare("SELECT * FROM services WHERE id = ?").get(result.lastInsertRowid);
+  return res.json({ ok: true, service: newSvc });
 });
 
-// Изменить услугу
-app.patch("/api/admin/services/:id", requireAdmin, async (req, res) => {
-  const id = Number(req.params.id);
-  const { title, partner, price, description, active } = req.body;
-
-  const db = await dbPromise;
-  const existing = await db.get("SELECT * FROM services WHERE id = ?", id);
-  if (!existing) return res.status(404).json({ error: "service not found" });
-
-  const newTitle = title ?? existing.title;
-  const newPartner = partner ?? existing.partner;
-  const newPrice = Number.isInteger(price) ? price : existing.price;
-  const newDesc = description ?? existing.description;
-  const newActive = typeof active === "number" ? active : existing.active;
-
-  await db.run(
-    "UPDATE services SET title = ?, partner = ?, price = ?, description = ?, active = ? WHERE id = ?",
-    newTitle,
-    newPartner,
-    newPrice,
-    newDesc,
-    newActive,
-    id
-  );
-
-  const updated = await db.get("SELECT * FROM services WHERE id = ?", id);
-  return res.json({ ok: true, service: updated });
-});
-
-// Все пользователи
-app.get("/api/admin/users", requireAdmin, async (req, res) => {
-  const db = await dbPromise;
-  const rows = await db.all(
-    "SELECT id, tg_id, phone, balance, role, created_at FROM users ORDER BY id DESC"
-  );
+app.get("/api/admin/users", (req, res) => {
+  const rows = db
+    .prepare("SELECT id, tg_id, phone, balance, role, created_at FROM users ORDER BY id DESC")
+    .all();
   return res.json({ users: rows });
 });
 
-// ==================== START SERVER ====================
-app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-});
+// ===== SERVER START =====
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
