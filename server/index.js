@@ -16,7 +16,7 @@ const CLIENT_URL = process.env.CLIENT_URL || "https://mvp-bonus-tma-1.onrender.c
 
 const app = express();
 
-// --- CORS FIX ---
+// --- CORS FIX (Render + Telegram WebView) ---
 app.use((req, res, next) => {
   const allowedOrigins = [
     process.env.CLIENT_URL,
@@ -26,19 +26,21 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
+  } else {
+    // Разрешаем всё для теста, можно убрать позже
+    res.setHeader("Access-Control-Allow-Origin", "*");
   }
-  res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.header("Access-Control-Allow-Credentials", "true");
+
+  // Отвечаем на preflight сразу
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
   }
   next();
 });
 // --- END FIX ---
-
-app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
 
