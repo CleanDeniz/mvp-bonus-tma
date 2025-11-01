@@ -1,19 +1,16 @@
 import sqlite3 from "sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
-import { open } from "sqlite";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const dbPromise = open({
-  filename: path.join(__dirname, "data.db"),
-  driver: sqlite3.Database
-});
+const dbPath = path.join(__dirname, "data.db");
+const db = new sqlite3.Database(dbPath);
 
-(async () => {
-  const db = await dbPromise;
-  await db.exec(`
+// --- Инициализация таблиц ---
+db.serialize(() => {
+  db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tg_id TEXT,
@@ -22,7 +19,8 @@ const dbPromise = open({
       role TEXT DEFAULT 'user'
     );
   `);
-  await db.exec(`
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS services (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT,
@@ -32,7 +30,8 @@ const dbPromise = open({
       active INTEGER DEFAULT 1
     );
   `);
-  await db.exec(`
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS purchases (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER,
@@ -40,7 +39,8 @@ const dbPromise = open({
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
-  console.log("✅ SQLite database initialized");
-})();
 
-export default dbPromise;
+  console.log("✅ SQLite database initialized at", dbPath);
+});
+
+export default db;
