@@ -16,10 +16,10 @@ const CLIENT_URL = process.env.CLIENT_URL || "https://mvp-bonus-tma-1.onrender.c
 
 const app = express();
 
-// --- CORS FIX (Render + Telegram WebView) ---
+// ==================== CORS FIX ====================
 app.use((req, res, next) => {
   const allowedOrigins = [
-    process.env.CLIENT_URL,
+    CLIENT_URL,
     "https://mvp-bonus-tma.onrender.com",
     "https://mvp-bonus-tma-1.onrender.com"
   ];
@@ -27,20 +27,21 @@ app.use((req, res, next) => {
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   } else {
-    // Разрешаем всё для теста, можно убрать позже
+    // Разрешаем всё для отладки (убрать в продакшне)
     res.setHeader("Access-Control-Allow-Origin", "*");
   }
-  res.header("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.header("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
 
-  // Отвечаем на preflight сразу
   if (req.method === "OPTIONS") {
     return res.sendStatus(200);
   }
   next();
 });
-// --- END FIX ---
+
+app.use(express.json());
+// =================================================
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
 
@@ -96,7 +97,7 @@ app.post("/api/user/phone", async (req, res) => {
     const updated = await db.get("SELECT * FROM users WHERE tg_id = ?", String(req.tgUser.id));
     return res.json({ user: updated });
   } catch (e) {
-    console.error(e);
+    console.error("[PHONE ERROR]", e);
     return res.status(500).json({ error: "failed to set phone" });
   }
 });
@@ -135,7 +136,7 @@ app.post("/api/user/redeem", async (req, res) => {
     return res.json({ ok: true, balance: updated.balance });
   } catch (e) {
     await db.run("ROLLBACK");
-    console.error(e);
+    console.error("[REDEEM ERROR]", e);
     return res.status(500).json({ error: "redeem failed" });
   }
 });
@@ -245,4 +246,5 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
+  console.log(`🌐 Allowed origin: ${CLIENT_URL}`);
 });
