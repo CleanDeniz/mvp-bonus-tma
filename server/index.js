@@ -16,39 +16,45 @@ const CLIENT_URL = process.env.CLIENT_URL || "https://mvp-bonus-tma-1.onrender.c
 
 const app = express();
 
-// ==================== CORS FIX ====================
+// ==================== CORS (исправленная версия) ====================
 app.use((req, res, next) => {
   const allowedOrigins = [
     CLIENT_URL,
     "https://mvp-bonus-tma.onrender.com",
     "https://mvp-bonus-tma-1.onrender.com"
   ];
+
   const origin = req.headers.origin;
   if (allowedOrigins.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   } else {
-    // Разрешаем всё для отладки (можно ограничить позже)
     res.setHeader("Access-Control-Allow-Origin", "*");
   }
+
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Access-Control-Allow-Credentials", "true");
+
+  if (req.method === "OPTIONS") {
+    // Разрешаем preflight-запросы Telegram
+    return res.sendStatus(200);
+  }
+
   next();
 });
-
-// 💡 Обработка preflight-запросов (OPTIONS)
-app.options("*", (req, res) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.sendStatus(200);
-});
-// ==================== END CORS FIX ====================
+// ================================================================
 
 app.use(express.json());
 
-// ==================== ВСПОМОГАТЕЛЬНЫЕ ====================
+// ==================== AUTH ====================
+
+// Telegram Auth должен вызываться только для реальных запросов, не для OPTIONS
+app.use((req, res, next) => {
+  if (req.method === "OPTIONS") return next();
+  authMiddleware(req, res, next);
+});
+
+// ==================== HELPERS ====================
 
 async function getOrCreateUserByTgId(db, tgId) {
   let row = await db.get("SELECT * FROM users WHERE tg_id = ?", String(tgId));
@@ -63,9 +69,7 @@ function isAdminTgId(tgId) {
   return ADMIN_TG_IDS.includes(String(tgId));
 }
 
-// ==================== AUTH ====================
-
-app.use(authMiddleware);
+// ==================== USER ROUTES ====================
 
 app.use(async (req, res, next) => {
   if (req.tgUser?.id) {
@@ -78,8 +82,6 @@ app.use(async (req, res, next) => {
   }
   next();
 });
-
-// ==================== ПОЛЬЗОВАТЕЛИ ====================
 
 app.get("/api/user/me", (req, res) => {
   return res.json({ user: req.userDb || null, tgUser: req.tgUser || null });
@@ -163,7 +165,7 @@ app.get("/api/user/purchases", async (req, res) => {
   return res.json({ items: rows });
 });
 
-// ==================== АДМИН ====================
+// ==================== ADMIN ====================
 
 function requireAdmin(req, res, next) {
   if (!req.tgUser?.id) return res.status(401).json({ error: "unauthorized" });
@@ -247,7 +249,7 @@ app.get("/api/admin/users", requireAdmin, async (req, res) => {
   return res.json({ users: rows });
 });
 
-// ==================== ЗАПУСК ====================
+// ==================== START SERVER ====================
 
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
