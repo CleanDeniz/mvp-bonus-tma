@@ -11,7 +11,7 @@ const CLIENT_URL = process.env.CLIENT_URL || "https://mvp-bonus-tma-1.onrender.c
 
 const app = express();
 
-// ===== CORS FIX =====
+// ==================== CORS FIX ====================
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,PUT,DELETE,OPTIONS");
@@ -24,7 +24,7 @@ app.use((req, res, next) => {
 app.use(express.json());
 app.use(authMiddleware);
 
-// ===== DB INIT FIX =====
+// ==================== INIT DATABASE ====================
 db.prepare(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,8 +57,35 @@ db.prepare(`
   )
 `).run();
 
-// ===== USER HELPERS =====
-async function getOrCreateUserByTgId(tgId) {
+// ==================== AUTOSEED TEST DATA ====================
+function seedDemoData() {
+  const userCount = db.prepare("SELECT COUNT(*) AS c FROM users").get().c;
+  const svcCount = db.prepare("SELECT COUNT(*) AS c FROM services").get().c;
+
+  if (userCount === 0) {
+    console.log("🌱 Seeding demo users...");
+    db.prepare(
+      "INSERT INTO users (tg_id, phone, balance, role) VALUES ('demo1', '+79998887766', 120, 'user')"
+    ).run();
+    db.prepare(
+      "INSERT INTO users (tg_id, phone, balance, role) VALUES ('demo2', '+79995553311', 300, 'user')"
+    ).run();
+  }
+
+  if (svcCount === 0) {
+    console.log("🌱 Seeding demo services...");
+    db.prepare(
+      "INSERT INTO services (title, partner, price, description) VALUES (?, ?, ?, ?)"
+    ).run("Скидка 20% в кафе «Осознанность»", "OsCafe", 100, "Купон на скидку при заказе");
+    db.prepare(
+      "INSERT INTO services (title, partner, price, description) VALUES (?, ?, ?, ?)"
+    ).run("1 месяц фитнеса GetFit", "GetFit Gym", 250, "Абонемент в зал на 30 дней");
+  }
+}
+seedDemoData();
+
+// ==================== HELPERS ====================
+function getOrCreateUserByTgId(tgId) {
   let user = db.prepare("SELECT * FROM users WHERE tg_id = ?").get(String(tgId));
   if (!user) {
     db.prepare("INSERT INTO users (tg_id, balance) VALUES (?, 0)").run(String(tgId));
@@ -67,20 +94,20 @@ async function getOrCreateUserByTgId(tgId) {
   return user;
 }
 
-// ===== AUTH MIDDLEWARE =====
-app.use(async (req, res, next) => {
+// ==================== AUTH ====================
+app.use((req, res, next) => {
   if (req.tgUser?.id) {
-    req.userDb = await getOrCreateUserByTgId(req.tgUser.id);
+    req.userDb = getOrCreateUserByTgId(req.tgUser.id);
   }
   next();
 });
 
-// ===== USERS =====
+// ==================== USERS ====================
 app.get("/api/user/me", (req, res) => {
   return res.json({ user: req.userDb || null, tgUser: req.tgUser || null });
 });
 
-app.post("/api/user/phone", async (req, res) => {
+app.post("/api/user/phone", (req, res) => {
   const { phone } = req.body;
   const user = req.userDb;
   if (!user) return res.status(401).json({ error: "no user" });
@@ -142,7 +169,7 @@ app.get("/api/user/purchases", (req, res) => {
   return res.json({ items: rows });
 });
 
-// ===== ADMIN (временно для всех) =====
+// ==================== ADMIN (временно для всех) ====================
 app.post("/api/admin/bonus", (req, res) => {
   const { phone, amount } = req.body;
   if (!phone || !Number.isInteger(amount)) {
@@ -184,5 +211,7 @@ app.get("/api/admin/users", (req, res) => {
   return res.json({ users: rows });
 });
 
-// ===== SERVER START =====
-app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
+// ==================== START SERVER ====================
+app.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+});
